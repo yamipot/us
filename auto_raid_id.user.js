@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GBF auto-copy battle ID
-// @match        https://game.granbluefantasy.jp/#raid_multi/*
+// @match        https://game.granbluefantasy.jp/*
 // @grant        GM_setClipboard
 // @sandbox      DOM
 // @inject-into  content
