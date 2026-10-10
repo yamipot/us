@@ -1,5 +1,7 @@
 // ==UserScript==
 // @name         GBF auto-copy battle ID
+// @version      0.1.1
+// @description  One script
 // @match        https://game.granbluefantasy.jp/*
 // @grant        GM_setClipboard
 // @sandbox      DOM
