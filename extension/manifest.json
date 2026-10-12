@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Battle ID",
+  "version": "0.2.2",
+  "description": "Copy nad paste battle id",
+  "permissions": ["clipboardRead", "clipboardWrite", "contextMenus", "storage", "debugger"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://game.granbluefantasy.jp/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ]
+}
