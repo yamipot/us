@@ -34,9 +34,15 @@
 
     document.addEventListener("focusin", (event) => {
         const mode = settings.pasteMode;
-        if (mode === "disable" || !event.target.matches(".prt-input-form .frm-battle-key")) return;
+        const input = event.target;
+        if (mode === "disable" || !input.matches(".prt-input-form .frm-battle-key") || input.value) return;
         setTimeout(async () => {
             try {
+                if (!input.isConnected || document.activeElement !== input || input.value) return;
+                const id = (await navigator.clipboard.readText()).trim();
+                if (!/^[a-z0-9]{8}$/i.test(id)) return;
+                // Clipboard access is asynchronous; preserve any typing or navigation since focus.
+                if (!input.isConnected || document.activeElement !== input || input.value) return;
                 if (mode === "cdp_ctrl_v") {
                     const response = await chrome.runtime.sendMessage({ type: "cdpCtrlV" });
                     if (!response.ok) throw new Error(response.error);
