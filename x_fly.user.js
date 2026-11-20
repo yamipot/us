@@ -8,9 +8,11 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_setValues
+// @grant        GM_download
 // @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
+// @grant        unsafeWindow
 // @noframes
 // @run-at       document-idle
 // ==/UserScript==
@@ -19,6 +21,10 @@
 const hideReadKey = "hideReadPosts";
 const profileViewKey = "profileStartPage";
 const defaultProfileView = "photo";
+
+function savedReadIds() {
+    return GM_listValues().filter((key) => /^\d+$/.test(key));
+}
 
 function setupProfileNavigation() {
     let profileView = GM_getValue(profileViewKey, defaultProfileView);
@@ -134,11 +140,9 @@ function setupReadPostHiding() {
     let activeFeed = null;
 
     function loadReadIds() {
-        for (const key of GM_listValues()) {
-            if (/^\d+$/.test(key)) {
-                readIds.add(key);
-                partialViews.delete(key);
-            }
+        for (const id of savedReadIds()) {
+            readIds.add(id);
+            partialViews.delete(id);
         }
     }
 
@@ -522,6 +526,150 @@ function setupReadPostHiding() {
     return scheduleFrame;
 }
 
+function setupVideoDownloads() {
+    const postSelector = 'article[data-testid="tweet"]';
+    const viewerSelector = '[data-testid="swipe-to-dismiss"]';
+    const immersiveCellSelector = '[data-testid^="cellInnerDiv-tweet-"]';
+    const immersiveBackSelector = 'button[data-testid^="immersive-tweet-back-button-"]';
+    const immersivePlayerSelector = '[data-testid="videoComponent"]';
+    const playerSelector = `:is(${postSelector}, ${viewerSelector}) [data-testid="videoPlayer"],
+        ${immersiveCellSelector}:has(${immersiveBackSelector}) ${immersivePlayerSelector}`;
+    const buttonClass = "yami-x-download-video";
+    const buttons = new Map();
+    let scanFrame = null;
+
+    function getDownloadUrl(player) {
+        // X's <video> plays a blob URL. Its player component holds the MP4 download link.
+        const fiberKey = Object.keys(player).find((key) => key.startsWith("__reactFiber$"));
+        for (let fiber = player[fiberKey]; fiber && fiber.type !== "article" && fiber.type !== "main"; fiber = fiber.return) {
+            const link = fiber.memoizedProps?.source?.downloadLink;
+            if (typeof link !== "string" || !link.startsWith("https://video.twimg.com/")) continue;
+            const url = new URL(link);
+            if (url.pathname.endsWith(".mp4")) return url;
+        }
+    }
+
+    function viewerBackButton(viewer) {
+        for (let container = viewer.parentElement; container && container.tagName !== "MAIN"; container = container.parentElement) {
+            const back = container.querySelector(':scope > [role="presentation"] > button[role="button"]');
+            if (back) return back;
+        }
+    }
+
+    function createDownloadButton(player) {
+        const button = document.createElement("button");
+        button.className = buttonClass;
+        button.type = "button";
+        button.textContent = "↓";
+        button.title = "Download video";
+        button.setAttribute("aria-label", button.title);
+        button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            const url = getDownloadUrl(player);
+            if (!url) {
+                button.remove();
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = "…";
+            function complete(error) {
+                button.disabled = false;
+                button.textContent = error ? "!" : "↓";
+                button.title = error ? "Video download failed. Try again." : "Download video";
+                button.setAttribute("aria-label", button.title);
+                if (error) console.warn("[x_fly] Could not download video.", error);
+            }
+
+            try {
+                GM_download({
+                    url: url.href,
+                    name: url.pathname.split("/").at(-1),
+                    onload: () => complete(),
+                    onerror: complete,
+                    ontimeout: () => complete("timeout"),
+                });
+            } catch (error) {
+                complete(error);
+            }
+        });
+        return button;
+    }
+
+    function placeDownloadButtons() {
+        scanFrame = null;
+        const players = new Set(unsafeWindow.document.querySelectorAll(playerSelector));
+        for (const [player, button] of buttons) {
+            if (players.has(player) && button.isConnected) continue;
+            button.remove();
+            buttons.delete(player);
+            resizeObserver.unobserve(player);
+        }
+
+        for (const player of players) {
+            const viewer = player.closest(viewerSelector);
+            const immersiveCell = player.matches(immersivePlayerSelector) ? player.closest(immersiveCellSelector) : null;
+            const back = immersiveCell?.querySelector(immersiveBackSelector) ?? (viewer && viewerBackButton(viewer));
+            const host = viewer || immersiveCell ? back?.parentElement : player.closest(postSelector);
+            if (!host) continue;
+
+            let button = buttons.get(player);
+            if (!button) {
+                if (!getDownloadUrl(player)) continue;
+                button = createDownloadButton(player);
+                buttons.set(player, button);
+                resizeObserver.observe(player);
+            }
+
+            // Position in the post or controls wrapper, outside the clipped video.
+            const anchorRect = (back ?? player).getBoundingClientRect();
+            const hostRect = host.getBoundingClientRect();
+            const left = back ? anchorRect.left + anchorRect.width / 2 : anchorRect.left;
+            const top = back ? anchorRect.bottom + 8 : anchorRect.top;
+            button.classList.toggle("yami-x-download-video-viewer", Boolean(back));
+            button.style.setProperty("--x-fly-video-left", `${left - hostRect.left - host.clientLeft}px`);
+            button.style.setProperty("--x-fly-video-top", `${top - hostRect.top - host.clientTop}px`);
+            if (button.parentElement !== host) host.append(button);
+        }
+    }
+
+    function schedulePlacement() {
+        scanFrame ??= requestAnimationFrame(placeDownloadButtons);
+    }
+
+    const resizeObserver = new ResizeObserver(schedulePlacement);
+    GM_addStyle(`
+        .${buttonClass} {
+            position: absolute;
+            top: var(--x-fly-video-top);
+            left: max(0px, calc(var(--x-fly-video-left) - 52px));
+            z-index: 2;
+            display: grid;
+            place-items: center;
+            inline-size: 44px;
+            block-size: 44px;
+            padding: 0;
+            border: 0;
+            border-radius: 12px;
+            color: white;
+            background: rgb(0 0 0 / 72%);
+            font: 22px/1 system-ui, sans-serif;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        .${buttonClass}.yami-x-download-video-viewer {
+            left: var(--x-fly-video-left);
+            translate: -50% 0;
+        }
+        .${buttonClass}:hover { background: rgb(0 0 0 / 90%); }
+        .${buttonClass}:focus-visible { outline: 2px solid white; outline-offset: 2px; }
+        .${buttonClass}:disabled { cursor: progress; }
+    `);
+    new MutationObserver(schedulePlacement).observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", schedulePlacement);
+    placeDownloadButtons();
+}
+
 function setupSettings(onClose) {
     const settingsButton = document.createElement("button");
     settingsButton.id = "yami-x-settings-button";
@@ -551,9 +699,11 @@ function setupSettings(onClose) {
                 <label><input type="radio" name="profile-view" value="photo"> Photos</label>
             </fieldset>
             <label><input type="checkbox" name="hide-read"> Hide read posts</label>
+            <p id="yami-x-saved-read-count"></p>
         </form>
     `;
     const hideReadCheckbox = settingsDialog.querySelector('[name="hide-read"]');
+    const savedReadCount = settingsDialog.querySelector("#yami-x-saved-read-count");
     const profileOptions = settingsDialog.querySelectorAll('[name="profile-view"]');
     hideReadCheckbox.addEventListener("change", () => GM_setValue(hideReadKey, hideReadCheckbox.checked));
     for (const option of profileOptions) {
@@ -567,6 +717,8 @@ function setupSettings(onClose) {
 
     settingsButton.addEventListener("click", () => {
         hideReadCheckbox.checked = GM_getValue(hideReadKey, false);
+        const count = savedReadIds().length;
+        savedReadCount.textContent = `${count.toLocaleString("en-US")} saved read ${count === 1 ? "post" : "posts"}`;
         showProfilePreference(GM_getValue(profileViewKey, defaultProfileView));
         settingsDialog.querySelector("[autofocus]")?.removeAttribute("autofocus");
         settingsDialog.querySelector('[name="profile-view"]:checked')?.setAttribute("autofocus", "");
@@ -672,11 +824,13 @@ function setupSettings(onClose) {
             cursor: pointer;
         }
         #yami-x-settings input { font: inherit; }
+        #yami-x-saved-read-count { margin: 0; }
     `);
     document.body.append(settingsButton, settingsDialog);
 }
 
 setupProfileNavigation();
 const scheduleReadCheck = setupReadPostHiding();
+setupVideoDownloads();
 setupSettings(scheduleReadCheck);
 })();
