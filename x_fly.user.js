@@ -101,7 +101,7 @@ function setupReadPostHiding() {
     const cardSelector = `main [data-testid="primaryColumn"] ${cellSelector} article[data-testid="tweet"]`;
     const hiddenClass = "yami-read-post-hidden";
     const hideBatchSize = 50;
-    const flushDelay = 15_000;
+    const saveBatchSize = 30;
     const readIds = new Set();
     const initialHiddenIds = new Set();
     const collapsedIds = new Set();
@@ -119,11 +119,16 @@ function setupReadPostHiding() {
     hideMoreButton.title = `Hide ${hideBatchSize} more read posts`;
     hideMoreButton.setAttribute("aria-label", hideMoreButton.title);
     hideMoreButton.hidden = true;
+    const saveReadsButton = document.createElement("button");
+    const readCountText = document.createTextNode("0");
+    saveReadsButton.id = "yami-x-save-reads";
+    saveReadsButton.type = "button";
+    saveReadsButton.append(readCountText);
     let hideRead = GM_getValue(hideReadKey, false);
     let remainingHides = hideBatchSize;
+    let readCount = 0;
     let hideStart = null;
     let menuId;
-    let flushTimer = null;
     let frame = null;
     let scanPending = true;
     let activeFeed = null;
@@ -137,22 +142,23 @@ function setupReadPostHiding() {
         }
     }
 
-    function scheduleFlush() {
-        flushTimer ??= setTimeout(flushReadIds, flushDelay);
+    function updateReadCountButton() {
+        readCountText.data = String(readCount);
+        saveReadsButton.title = `Save read posts (${pendingIds.size} pending)`;
+        saveReadsButton.setAttribute("aria-label", `${readCount} read posts. ${saveReadsButton.title}`);
     }
 
     function flushReadIds() {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-        if (!pendingIds.size) return;
+        if (!pendingIds.size) return true;
 
         try {
             // Write independent ID keys so concurrent tabs can commit without replacing each other's batches.
             GM_setValues(Object.fromEntries([...pendingIds].map((id) => [id, true])));
             pendingIds.clear();
+            return true;
         } catch (error) {
             console.warn("[x_fly] Could not save read IDs.", error);
-            scheduleFlush();
+            return false;
         }
     }
 
@@ -339,7 +345,9 @@ function setupReadPostHiding() {
                 partialViews.delete(id);
                 readIds.add(id);
                 pendingIds.add(id);
-                scheduleFlush();
+                readCount += 1;
+                if (pendingIds.size % saveBatchSize === 0) flushReadIds();
+                updateReadCountButton();
             } else if (progress.topSeen || progress.bottomSeen) {
                 partialViews.set(id, progress);
             }
@@ -421,7 +429,13 @@ function setupReadPostHiding() {
             return;
         }
     });
-    document.body.append(hideMoreButton);
+    saveReadsButton.addEventListener("click", () => {
+        if (!flushReadIds()) return;
+        readCount = 0;
+        updateReadCountButton();
+    });
+    updateReadCountButton();
+    document.body.append(hideMoreButton, saveReadsButton);
 
     const intersectionObserver = new IntersectionObserver((entries) => {
         for (const entry of entries) {
@@ -499,14 +513,11 @@ function setupReadPostHiding() {
     viewport.addEventListener("scroll", scheduleFrame, { passive: true });
     viewport.addEventListener("resize", scheduleFrame);
     document.addEventListener("visibilitychange", () => {
-        if (document.hidden) {
-            flushReadIds();
-        } else {
+        if (!document.hidden) {
             loadReadIds();
             scheduleScan();
         }
     });
-    window.addEventListener("pagehide", flushReadIds);
 
     return scheduleFrame;
 }
@@ -564,7 +575,7 @@ function setupSettings(onClose) {
     settingsDialog.addEventListener("close", onClose);
 
     GM_addStyle(`
-        #yami-x-settings-button, #yami-x-settings, #yami-x-hide-more {
+        :is(#yami-x-settings-button, #yami-x-settings, #yami-x-hide-more, #yami-x-save-reads) {
             --x-fly-dock-offset: max(72px, calc(env(safe-area-inset-bottom) + 16px));
             color-scheme: light dark;
             background: Canvas;
@@ -575,10 +586,10 @@ function setupSettings(onClose) {
             box-sizing: border-box;
         }
         body:has([data-testid="GrokDrawerHeader"], [data-testid="chat-drawer-main"])
-            :is(#yami-x-settings-button, #yami-x-settings, #yami-x-hide-more) {
+            :is(#yami-x-settings-button, #yami-x-settings, #yami-x-hide-more, #yami-x-save-reads) {
             --x-fly-dock-offset: max(160px, calc(env(safe-area-inset-bottom) + 128px));
         }
-        #yami-x-settings-button, #yami-x-hide-more {
+        :is(#yami-x-settings-button, #yami-x-hide-more, #yami-x-save-reads) {
             z-index: 9999;
             display: grid;
             place-items: center;
@@ -595,12 +606,20 @@ function setupSettings(onClose) {
             font: 22px/1 system-ui, sans-serif;
         }
         #yami-x-hide-more {
-            inset-block-end: calc(var(--x-fly-dock-offset) + 52px);
+            inset-block-end: calc(var(--x-fly-dock-offset) + 104px);
             font: 14px/1 system-ui, sans-serif;
         }
-        :is(#yami-x-settings-button, #yami-x-hide-more):hover { background: ButtonFace; }
-        #yami-x-hide-more:active { scale: 0.97; }
-        #yami-x-hide-more:focus-visible { outline: 2px solid CanvasText; outline-offset: 3px; }
+        #yami-x-save-reads {
+            inset-block-end: calc(var(--x-fly-dock-offset) + 52px);
+            font: 14px/1 system-ui, sans-serif;
+            font-variant-numeric: tabular-nums;
+            inline-size: max-content;
+            min-inline-size: 44px;
+            padding-inline: 6px;
+        }
+        :is(#yami-x-settings-button, #yami-x-hide-more, #yami-x-save-reads):hover { background: ButtonFace; }
+        :is(#yami-x-hide-more, #yami-x-save-reads):active { scale: 0.97; }
+        :is(#yami-x-hide-more, #yami-x-save-reads):focus-visible { outline: 2px solid CanvasText; outline-offset: 3px; }
         #yami-x-settings {
             --x-fly-dialog-offset: min(calc(var(--x-fly-dock-offset) + 54px), 36dvh);
             inset-block-start: auto;
