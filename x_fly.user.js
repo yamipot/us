@@ -105,9 +105,9 @@ function setupProfileNavigation() {
 function setupReadPostHiding() {
     const cellSelector = '[data-testid="cellInnerDiv"]';
     const cardSelector = `main [data-testid="primaryColumn"] ${cellSelector} article[data-testid="tweet"]`;
-    const hiddenClass = "yami-read-post-hidden";
+    const hiddenAttribute = "data-yami-read-post-hidden";
     const hideBatchSize = 50;
-    const saveBatchSize = 30;
+    const saveBatchSize = 15;
     const readIds = new Set();
     const initialHiddenIds = new Set();
     const collapsedIds = new Set();
@@ -180,10 +180,10 @@ function setupReadPostHiding() {
                 <label>From
                     <select name="direction">
                         <option value="first">First</option>
-                        <option value="last">Last</option>
+                        <option value="last" selected>Last</option>
                     </select>
                 </label>
-                <label>Count <input name="count" type="number" min="1" step="1" value="1" required></label>
+                <label>Count <input name="count" type="number" min="1" step="1" required></label>
                 <button type="submit">Show</button>
             </form>
         `;
@@ -192,6 +192,9 @@ function setupReadPostHiding() {
         const count = form.elements.namedItem("count");
         const notice = { details, summary: details.querySelector("summary"), count, articles: [] };
 
+        details.addEventListener("toggle", () => {
+            if (!details.open) form.reset();
+        });
         form.addEventListener("submit", (event) => {
             event.preventDefault();
             const amount = count.valueAsNumber;
@@ -199,7 +202,7 @@ function setupReadPostHiding() {
 
             const available = notice.articles.filter((article) => {
                 const id = mountedCards.get(article);
-                return id && article.isConnected && article.classList.contains(hiddenClass) && postId(article) === id;
+                return id && article.isConnected && article.hasAttribute(hiddenAttribute) && postId(article) === id;
             });
             const selected = direction.value === "first" ? available.slice(0, amount) : available.slice(-amount);
             for (const article of selected) {
@@ -219,9 +222,9 @@ function setupReadPostHiding() {
         let group;
         let previousCell;
         for (const article of articles) {
-            if (!article.classList.contains(hiddenClass)) continue;
+            if (!article.hasAttribute(hiddenAttribute)) continue;
             const cell = article.closest(cellSelector);
-            if (previousCell?.nextElementSibling !== cell) {
+            if (previousCell !== cell && previousCell?.nextElementSibling !== cell) {
                 group = [];
                 groups.set(cell, group);
             }
@@ -243,9 +246,11 @@ function setupReadPostHiding() {
             }
             notice.articles = groupArticles;
             const count = groupArticles.length;
+            const defaultCount = String(Math.min(5, count));
             const message = count === 1 ? "1 read post hidden" : `${count} read posts hidden`;
             if (notice.summary.textContent !== message) notice.summary.textContent = message;
             if (notice.count.max !== String(count)) notice.count.max = String(count);
+            if (notice.count.defaultValue !== defaultCount) notice.count.defaultValue = defaultCount;
             if (notice.count.valueAsNumber > count) notice.count.value = String(count);
             // X keeps ownership of its tweet and virtual list cell. Only append our own notice.
             if (notice.details.parentElement !== cell) cell.append(notice.details);
@@ -259,7 +264,8 @@ function setupReadPostHiding() {
     }
 
     function updateHidden(article, id) {
-        article.classList.toggle(hiddenClass, hideRead && collapsedIds.has(id) && !revealedIds.has(id));
+        // X rewrites the card's className during rendering.
+        article.toggleAttribute(hiddenAttribute, hideRead && collapsedIds.has(id) && !revealedIds.has(id));
     }
 
     function cellTop(article) {
@@ -294,7 +300,7 @@ function setupReadPostHiding() {
         visibleCards.delete(article);
         intersectionObserver.unobserve(article);
         resizeObserver.unobserve(article);
-        article.classList.remove(hiddenClass);
+        article.removeAttribute(hiddenAttribute);
     }
 
     function reconcileCards() {
@@ -339,11 +345,14 @@ function setupReadPostHiding() {
 
             const center = (visibleLeft + visibleRight) / 2;
             const progress = partialViews.get(id) ?? { topSeen: false, bottomSeen: false };
-            // Sample just inside each edge to exclude cards covered by X's sticky bars or dialogs.
-            progress.topSeen ||= rect.top >= top && rect.top + 1 < bottom
-                && article.contains(document.elementFromPoint(center, rect.top + 1));
-            progress.bottomSeen ||= rect.bottom <= bottom && rect.bottom - 1 > top
-                && article.contains(document.elementFromPoint(center, rect.bottom - 1));
+            // X's thread separators can cover the outer pixels of a card.
+            const inset = Math.min(4, rect.height / 2);
+            const topSample = rect.top + inset;
+            const bottomSample = rect.bottom - inset;
+            progress.topSeen ||= rect.top >= top && topSample < bottom
+                && article.contains(document.elementFromPoint(center, topSample));
+            progress.bottomSeen ||= rect.bottom <= bottom && bottomSample > top
+                && article.contains(document.elementFromPoint(center, bottomSample));
 
             if (progress.topSeen && progress.bottomSeen) {
                 partialViews.delete(id);
@@ -451,7 +460,7 @@ function setupReadPostHiding() {
     const resizeObserver = new ResizeObserver(scheduleFrame);
 
     GM_addStyle(`
-        .${hiddenClass} { display: none !important; }
+        [${hiddenAttribute}] { display: none !important; }
         #yami-x-hide-more[hidden] { display: none; }
         .yami-x-read-notice {
             display: block;
