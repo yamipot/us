@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         GBF auto-copy battle ID
+// @name         Auto-copy battle ID
 // @version      0.1.2
 // @description  Copy rescue IDs and fill valid clipboard IDs when the entry field is focused.
 // @match        https://game.granbluefantasy.jp/*
